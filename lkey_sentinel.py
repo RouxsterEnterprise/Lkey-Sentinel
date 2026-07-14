@@ -52,6 +52,25 @@ def _load_telegram():
     return tok, chat
 
 
+def machine_label():
+    """Friendly machine name for alerts: SENTINEL_MACHINE_NAME from .env if set,
+    else the computer's hostname. Lets you tell WHICH machine an alert is from."""
+    import os, socket
+    name = os.environ.get("SENTINEL_MACHINE_NAME", "").strip()
+    if not name:
+        # also check the .env file directly (same pattern the token uses)
+        try:
+            envf = ROOT / ".env"
+            if envf.exists():
+                for line in envf.read_text(encoding="utf-8").splitlines():
+                    if line.strip().startswith("SENTINEL_MACHINE_NAME"):
+                        name = line.split("=", 1)[1].strip()
+                        break
+        except Exception:
+            pass
+    return name or socket.gethostname()
+
+
 def send_telegram(text):
     tok, chat = _load_telegram()
     if not tok or not chat:
@@ -249,7 +268,7 @@ def _log_crash(name, faulting, detail, vitals_ring, confirmed):
             pass
 
 
-def detect_crashes(prev_procs, now_procs, vitals_ring, say, notify_telegram=True):
+def detect_crashes(prev_procs, now_procs, vitals_ring, say, notify_telegram=True, machine=None):
     """Compare process snapshots; for anything that vanished, confirm via the
     Windows event log, log both files, and ping Telegram on a real crash.
     Returns the current process set to become 'prev' for the next poll."""
@@ -291,7 +310,9 @@ def detect_crashes(prev_procs, now_procs, vitals_ring, say, notify_telegram=True
             say(f"💥 {name} CRASHED — faulting module: {match['faulting_module']}")
             _log_crash(name, match["faulting_module"], match["detail"], vitals_ring, True)
             if notify_telegram:
+                _mach = machine or machine_label()
                 send_telegram(f"💥 LKEY SENTINEL — CRASH DETECTED\n"
+                              f"Machine: {_mach}\n"
                               f"Program: {name}\n"
                               f"Faulting module: {match['faulting_module']}\n"
                               f"Vitals + full debug saved to the crash log.")
@@ -303,7 +324,7 @@ def detect_crashes(prev_procs, now_procs, vitals_ring, say, notify_telegram=True
 def watch(cfg, notify=None, stop=lambda: False):
     import socket
     ring = []
-    machine_name = socket.gethostname()
+    machine_name = machine_label()  # friendly name from .env, else hostname
     say = notify or (lambda m: print(m))
     say(f"🛡️ Sentinel online ({machine_name}) — gentle watch every {cfg['poll_seconds']}s. "
         "Warns before trouble; pings Telegram on danger; logs a black box.")
@@ -319,7 +340,7 @@ def watch(cfg, notify=None, stop=lambda: False):
         # 💥 crash detection: did anything die since last poll?
         now_procs = _running_procs()
         try:
-            detect_crashes(prev_procs, now_procs, ring, say)
+            detect_crashes(prev_procs, now_procs, ring, say, machine=machine_name)
         except Exception:
             pass
         prev_procs = now_procs
