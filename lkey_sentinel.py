@@ -22,6 +22,10 @@
 
 import json
 import os
+try:
+    from sentinel_fixes import fix_hint
+except Exception:
+    def fix_hint(x): return ""  # graceful if module missing
 import sys
 import time
 from datetime import datetime
@@ -311,11 +315,13 @@ def detect_crashes(prev_procs, now_procs, vitals_ring, say, notify_telegram=True
             _log_crash(name, match["faulting_module"], match["detail"], vitals_ring, True)
             if notify_telegram:
                 _mach = machine or machine_label()
+                _crash_sig = f"{name} {match['faulting_module']}"
+                _hint = fix_hint(_crash_sig)
                 send_telegram(f"💥 LKEY SENTINEL — CRASH DETECTED\n"
                               f"Machine: {_mach}\n"
                               f"Program: {name}\n"
                               f"Faulting module: {match['faulting_module']}\n"
-                              f"Vitals + full debug saved to the crash log.")
+                              f"Vitals + full debug saved to the crash log.{_hint}")
         else:
             # vanished but no crash record — log quietly, no ping (probably normal)
             _log_crash(name, "?", "", vitals_ring, False)
