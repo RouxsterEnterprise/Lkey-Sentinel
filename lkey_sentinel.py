@@ -89,6 +89,32 @@ def send_telegram(text):
     except Exception:
         return False
 
+_SAFETY_TEXT = """📸 ABOUT THIS FOLDER — read once, stay safe
+
+Screenshots capture EVERYTHING visible on screen — including passwords,
+API keys, private messages, and banking details if they were open.
+
+Before sharing any capture (Telegram, Discord, email, forums):
+  1. Look at it first. Zoom in. Check every corner.
+  2. Crop or redact anything sensitive.
+  3. Delete captures you no longer need — this folder is not a vault.
+
+If a secret does leak in a shared image, treat it as exposed:
+rotate or replace that key/password immediately.
+
+— Lkey keeps you safer than anything else. That includes from ourselves.
+"""
+
+def _drop_safety_note(d):
+    """[SNAP-SAFETY] Self-documenting folder: one educational note, written once."""
+    try:
+        n = Path(d) / "_SAFETY_NOTE.txt"
+        if not n.exists():
+            n.write_text(_SAFETY_TEXT, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def send_telegram_photo(path, caption=""):
     """[EYES-V2] Send an image to Telegram. Same philosophy as send_telegram:
     stdlib-only multipart, silent skip when unconfigured, never raises."""
@@ -612,6 +638,7 @@ def main():
                         from datetime import datetime
                         shots = os.path.join(os.path.expanduser("~"), "Pictures", "Lkey_Screenshots")
                         os.makedirs(shots, exist_ok=True)
+                        _drop_safety_note(shots)
                         fname = os.path.join(shots, f"screenshot_{datetime.now():%Y%m%d_%H%M%S}.png")
                         try:
                             ImageGrab.grab(all_screens=True).save(fname)
