@@ -89,12 +89,64 @@ def send_telegram(text):
     except Exception:
         return False
 
+_SAFETY_TEXT = """📸 ABOUT THIS FOLDER — read once, stay safe
+
+Screenshots capture EVERYTHING visible on screen — including passwords,
+API keys, private messages, and banking details if they were open.
+
+Before sharing any capture (Telegram, Discord, email, forums):
+  1. Look at it first. Zoom in. Check every corner.
+  2. Crop or redact anything sensitive.
+  3. Delete captures you no longer need — this folder is not a vault.
+
+If a secret does leak in a shared image, treat it as exposed:
+rotate or replace that key/password immediately.
+
+— Lkey keeps you safer than anything else. That includes from ourselves.
+"""
+
+def _drop_safety_note(d):
+    """[SNAP-SAFETY] Self-documenting folder: one educational note, written once."""
+    try:
+        n = Path(d) / "_SAFETY_NOTE.txt"
+        if not n.exists():
+            n.write_text(_SAFETY_TEXT, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def send_telegram_photo(path, caption=""):
+    """[EYES-V2] Send an image to Telegram. Same philosophy as send_telegram:
+    stdlib-only multipart, silent skip when unconfigured, never raises."""
+    tok, chat = _load_telegram()
+    if not tok or not chat:
+        return False
+    try:
+        import urllib.request, uuid
+        data = Path(path).read_bytes()
+        b = uuid.uuid4().hex
+        body = b"".join([
+            f"--{b}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat}\r\n".encode(),
+            f"--{b}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n{caption[:1000]}\r\n".encode(),
+            f"--{b}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"{Path(path).name}\"\r\n"
+            f"Content-Type: image/png\r\n\r\n".encode(), data, b"\r\n".encode(),
+            f"--{b}--\r\n".encode()])
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{tok}/sendPhoto", data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={b}"})
+        urllib.request.urlopen(req, timeout=20)
+        return True
+    except Exception:
+        return False
+
+
 DEFAULTS = {
     "poll_seconds": 5,          # slow + gentle; raise to 10 for even less load
     "gpu_temp_warn": 83,        # °C — 5090 throttles ~83-88; warn before that
     "cpu_temp_warn": 90,        # °C
     "ram_percent_warn": 92,     # % — approaching exhaustion
     "vram_percent_warn": 94,    # % — VRAM pressure precedes many game crashes
+    "sustain_samples": 3,       # consecutive readings a condition must hold before an alert may speak
     "history_ring": 12,         # keep last N samples in the black box on alert
 }
 
@@ -139,25 +191,70 @@ def sample():
         mem = pynvml.nvmlDeviceGetMemoryInfo(h)
         s["vram"] = round(mem.used / mem.total * 100, 1)
         s["vram_used_gb"] = round(mem.used / 1e9, 1)
+        s["vram_total_gb"] = round(mem.total / 1e9, 1)
         util = pynvml.nvmlDeviceGetUtilizationRates(h)
         s["gpu_load"] = util.gpu
         pynvml.nvmlShutdown()
     except Exception:
         pass  # no NVML -> GPU fields simply absent; CPU/RAM watch still works
+    _flight_record(s)
     return s
 
 
+FLIGHT_LOG = ROOT / "app" / "data" / "sentinel_readings.csv"
+_FLIGHT_KEYS = ["t", "cpu", "cpu_temp", "ram", "ram_used_gb",
+                "gpu_temp", "gpu_load", "vram", "vram_used_gb"]
+
+
+def _flight_record(s):
+    """Continuous flight recorder — EVERY sample lands here, alert or not.
+    The next 'it lied' gets settled by history, not theories. ~5MB rotation."""
+    try:
+        FLIGHT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        if FLIGHT_LOG.exists() and FLIGHT_LOG.stat().st_size > 5_000_000:
+            FLIGHT_LOG.replace(FLIGHT_LOG.with_suffix(".csv.1"))
+        fresh = not FLIGHT_LOG.exists()
+        with open(FLIGHT_LOG, "a", encoding="utf-8", newline="") as f:
+            if fresh:
+                f.write("date," + ",".join(_FLIGHT_KEYS) + "\n")
+            f.write(datetime.now().strftime("%Y-%m-%d") + "," +
+                    ",".join(str(s.get(k, "")) for k in _FLIGHT_KEYS) + "\n")
+    except OSError:
+        pass
+
+
+_BREACH_STREAK = {}
+
+
 def evaluate(s, cfg):
-    """Return list of (level, message) warnings for this sample."""
+    """Return list of (level, message) warnings for this sample.
+
+    HONEST ALERT: a condition must hold for cfg['sustain_samples']
+    consecutive readings before it may speak. Single-sample blips are
+    recorded in the flight log, never shouted. Alerts carry evidence
+    (GB + held-duration), so a warning is always checkable."""
     alerts = []
-    def chk(key, limit, label, unit="°C"):
+    need = int(cfg.get("sustain_samples", 3))
+    poll = int(cfg.get("poll_seconds", 5))
+
+    def chk(key, limit, label, unit="°C", extra=""):
         v = s.get(key)
-        if isinstance(v, (int, float)) and v >= limit:
-            alerts.append(("DANGER", f"{label} {v}{unit} ≥ {limit}{unit}"))
+        breach = isinstance(v, (int, float)) and v >= limit
+        streak = (_BREACH_STREAK.get(key, 0) + 1) if breach else 0
+        _BREACH_STREAK[key] = streak
+        if breach and streak >= need:
+            alerts.append(("DANGER",
+                           f"{label} {v}{unit} ≥ {limit}{unit}{extra} — held {streak * poll}s"))
+
+    vram_extra = ""
+    if "vram_used_gb" in s and "vram_total_gb" in s:
+        vram_extra = f" ({s['vram_used_gb']}/{s['vram_total_gb']} GB)"
+    ram_extra = f" ({s.get('ram_used_gb', '?')} GB used)" if "ram_used_gb" in s else ""
+
     chk("gpu_temp", cfg["gpu_temp_warn"], "GPU temp")
     chk("cpu_temp", cfg["cpu_temp_warn"], "CPU temp")
-    chk("ram", cfg["ram_percent_warn"], "RAM", "%")
-    chk("vram", cfg["vram_percent_warn"], "VRAM", "%")
+    chk("ram", cfg["ram_percent_warn"], "RAM", "%", ram_extra)
+    chk("vram", cfg["vram_percent_warn"], "VRAM", "%", vram_extra)
     return alerts
 
 
@@ -184,7 +281,10 @@ def fmt(s):
     if "gpu_temp" in s:
         bits.append(f"GPU {s.get('gpu_load','--')}% {s['gpu_temp']}°C")
     if "vram" in s:
-        bits.append(f"VRAM {s['vram']}%")
+        vb = f"VRAM {s['vram']}%"
+        if "vram_used_gb" in s and "vram_total_gb" in s:
+            vb += f" ({s['vram_used_gb']}/{s['vram_total_gb']}G)"
+        bits.append(vb)
     return " | ".join(bits)
 
 
@@ -578,17 +678,28 @@ def main():
                             pass
                 import threading as _th
                 _th.Thread(target=_do, daemon=True).start()
-            def _screenshot(icon, item):
+            def _screenshot(icon, item):          # [EYES-V2] all screens + reveal + telegram
                 def _do():
                     try:
                         from PIL import ImageGrab
                         import os
+                        import subprocess
                         from datetime import datetime
                         shots = os.path.join(os.path.expanduser("~"), "Pictures", "Lkey_Screenshots")
-                        os.makedirs(shots, exist_ok=True)  # make folder first (the snag we found)
+                        os.makedirs(shots, exist_ok=True)
+                        _drop_safety_note(shots)
                         fname = os.path.join(shots, f"screenshot_{datetime.now():%Y%m%d_%H%M%S}.png")
-                        ImageGrab.grab().save(fname)
+                        try:
+                            ImageGrab.grab(all_screens=True).save(fname)
+                        except TypeError:
+                            ImageGrab.grab().save(fname)   # older PIL: primary screen only
                         state["last"] = f"\U0001f4f8 Saved: {os.path.basename(fname)}"
+                        try:  # reveal in Explorer with the new file selected — no hunting
+                            subprocess.Popen(["explorer", "/select,", os.path.normpath(fname)])
+                        except Exception:
+                            pass
+                        if send_telegram_photo(fname, f"\U0001f4f8 {machine_label()} screenshot"):
+                            state["last"] += " + sent to Telegram"
                     except Exception as _e:
                         state["last"] = f"Screenshot failed: {_e}"
                     try:
@@ -597,11 +708,25 @@ def main():
                         pass
                 import threading as _th
                 _th.Thread(target=_do, daemon=True).start()
+
+            def _open_caps(icon=None, item=None):   # [EYES-V2]
+                import os as _os
+                import subprocess as _sp
+                d = _os.path.join(_os.path.expanduser("~"), "Pictures", "Lkey_Screenshots")
+                try:
+                    _os.makedirs(d, exist_ok=True)
+                    if hasattr(_os, "startfile"):
+                        _os.startfile(d)
+                    else:
+                        _sp.Popen(["explorer.exe", d])
+                except Exception as _e:
+                    state["last"] = f"Could not open captures: {_e}"
             icon = pystray.Icon("LkeySentinel", img, "Lkey Sentinel",
                                 menu=pystray.Menu(
                                     pystray.MenuItem(lambda i: state["last"], None, enabled=False),
                                     pystray.MenuItem("Check for updates", _check_updates),
                                     pystray.MenuItem("\U0001f4f8 Screenshot", _screenshot),
+                                    pystray.MenuItem("Open captures folder", _open_caps),
                                     pystray.MenuItem("Free memory (safe)", _free_mem),
                                     pystray.MenuItem("Quit", _quit)))
             import threading
