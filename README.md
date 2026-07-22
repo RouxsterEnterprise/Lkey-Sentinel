@@ -1,58 +1,96 @@
-# 🛡️ Lkey Sentinel
+# Lkey Sentinel
 
-A featherweight guardian for any Windows PC.
+A small, free, open-source Windows tray tool that watches your PC's vitals while
+you game — CPU/GPU temperature, system RAM, and VRAM — and warns you **before** a
+freeze, so you have time to save and act. It can also politely free browser
+memory, take a screenshot from the tray, and (optionally) send alerts to your
+phone via Telegram.
 
-Lkey Sentinel sits quietly in the background, sips telemetry on a slow timer, and makes any machine easier to monitor, debug, and maintain — whether it's a gaming rig, a workstation, a creator's setup, or a computer you look after for someone else. It does three things:
+No accounts. No ads. Nothing leaves your machine unless you explicitly
+configure Telegram.
 
-- **Warns before trouble** — watches GPU/CPU temps, RAM, and VRAM, and alerts you *before* a crash when the machine enters the danger zone ("VRAM 94% — save your work").
-- **Catches crashes** — the moment a program or game dies, it cross-checks the Windows Event Log, records **why** (the faulting module) along with the machine's vital signs in the seconds before the crash, and pings you — so the cause is visible, even remotely.
-- **Stays out of the way** — a few MB of footprint, read-only toward your system. It never throttles, kills, or touches your programs, games, launchers, anti-cheat, or anything you're actively using.
+## What it actually does
 
-It cannot fix hardware faults — it gives you **early warning** and a **black box** so the real cause is visible, whether the machine is in front of you or across the country.
+- **Early warnings.** Polls temperatures, RAM, and VRAM against thresholds and
+  raises a Windows notification when one is crossed. Sustained conditions
+  (long gaming sessions) warn once — not every few seconds.
+- **Free memory (safe).** Closes *spare background* browser renderer
+  processes to reclaim RAM. It never force-kills your browser, your active
+  tabs, or your game. Gains are deliberately modest — safety first.
+- **Screenshot from the tray.** Captures all screens, saves to
+  `Pictures/Lkey_Screenshots` as `screenshot_YYYYMMDD_HHMMSS.png`, and opens
+  File Explorer with the new file already selected. If Telegram is
+  configured, the photo is also sent to your chat.
+- **Open captures folder.** One click to where your screenshots live.
+- **Safety note.** Your first capture drops `_SAFETY_NOTE.txt` into the
+  folder: screenshots capture *everything* on screen — passwords, keys,
+  private messages — so review before sharing, crop what's sensitive, and
+  treat any leaked secret as exposed.
+- **Crash fix helper.** Recognizes some known crash patterns (OneDrive,
+  Copilot) and writes **reviewable** fix scripts. It never runs them — you
+  read, then you run, and Windows' own UAC prompt gates anything elevated.
+- **Black box.** Recent samples and events are kept in
+  `app/data/sentinel_blackbox.log`; plain-English crash notes in
+  `app/data/sentinel_crashes.log`.
+- **Self-updater.** Pull-based and version-gated: "Check for updates"
+  downloads the newer version to a temp file, verifies it compiles, backs up
+  your current copy, and **stages the update for the next start** — quit and
+  relaunch to apply. It never swaps the running file mid-run and never
+  downgrades.
 
 ## Quick start
 
-1. **Install Python 3.10+** from [python.org](https://www.python.org/downloads/) (tick "Add Python to PATH").
-2. **Install dependencies:**
-   ```
-   pip install psutil pynvml pywin32 pystray pillow
-   ```
-   (Only `psutil` is strictly required. `pynvml` adds NVIDIA GPU stats, `pywin32` enables crash confirmation from the Event Log, `pystray`+`pillow` enable the system-tray mode.)
-3. **Run it:**
-   ```
-   python lkey_sentinel.py            # console mode
-   python lkey_sentinel.py --tray     # quiet system-tray mode
-   python lkey_sentinel.py --once     # single snapshot and exit
-   ```
+1. Install **Python 3.12 (64-bit)** from python.org. On a fresh Windows,
+   first disable the Microsoft Store "python" aliases (Settings → Apps →
+   Advanced app settings → App execution aliases) — `INSTALL.bat` checks for
+   this decoy and will tell you.
+2. Download or clone this folder and run `INSTALL.bat` once — it installs
+   the few required packages.
+3. Run `START_SENTINEL.bat`. A tray icon appears near your clock.
 
-Or just double-click **START_SENTINEL.bat**.
+## Tray menu
 
-## Getting Telegram alerts (optional but recommended)
+Status line (latest event) · Check for updates · 📸 Screenshot ·
+Open captures folder · Free memory (safe) · Quit
 
-Remote alerts let you know the instant something goes wrong — even when you're not at the machine.
+## Optional Telegram (`.env`)
 
-1. On Telegram, message **@BotFather**, send `/newbot`, and follow the prompts. It gives you a **bot token**.
-2. Message your new bot anything, then visit `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser to find your **chat ID** (the `"id"` number under `"chat"`).
-3. Copy `.env.EXAMPLE` to `.env` and fill in:
-   ```
-   TELEGRAM_BOT_TOKEN=your_token_here
-   TELEGRAM_CHAT_ID=your_chat_id_here
-   ```
+Create a file named `.env` next to the script. Entirely optional — the tool
+works normally without it.
 
-Without these, Sentinel still watches and logs locally — it just won't send remote pings.
+```ini
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_numeric_chat_id
+SENTINEL_MACHINE_NAME=GamingRig   # optional label so alerts say which PC
+```
 
-## Where the logs live
+With both keys set, warnings text your phone and tray screenshots arrive as
+photos. Without them, everything stays local — silently, by design.
 
-- `app/data/sentinel_crashes.log` — plain-English crash record ("Cyberpunk2077.exe crashed — faulting module: nvwgf2umx.dll")
-- `app/data/sentinel_crash_debug.log` — long-form debug dump with vitals at crash time (share this to diagnose the cause)
-- `app/data/sentinel_blackbox.log` — pre-crash vitals when a danger threshold is crossed
+## Thresholds (`app/data/sentinel.json`)
 
-## Tuning
+Created on first run with these defaults; edit the file and restart to tune:
 
-Thresholds live in `app/data/sentinel.json` (created on first run). Raise `poll_seconds` for even lighter load; adjust the temp/RAM/VRAM warning levels for your hardware.
+```json
+{
+  "poll_seconds": 5,
+  "gpu_temp_warn": 83,
+  "cpu_temp_warn": 90,
+  "ram_percent_warn": 92,
+  "vram_percent_warn": 94,
+  "history_ring": 12
+}
+```
+
+## Honest limitations
+
+- **Not an overclocking or fan-control tool.** It monitors and warns; it
+  cannot change fan speeds, undervolt, or stop thermal throttling.
+- **Sensor compatibility varies.** Some boards and GPUs need vendor drivers
+  or admin rights before Windows exposes accurate temperatures.
+- **No guarantee against crashes.** Warnings buy you time to save and act;
+  they cannot prevent driver timeouts, software bugs, or hardware faults.
 
 ## License
 
-MIT — free to use, modify, and share. See [LICENSE](LICENSE).
-
-*Part of the Lkey ecosystem by Rouxster Enterprise.*
+MIT. Free to inspect, modify, and build on.
