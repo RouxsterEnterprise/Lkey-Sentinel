@@ -731,16 +731,18 @@ def _beacon_frames(animate=True, size=64, steps=20):
 
 
 def _open_panel(state, cfg, actions):
-    """[PANEL v1] Optional always-on-top mini window. PURE STDLIB tkinter
+    """[PANEL v1.2] Optional always-on-top mini window. PURE STDLIB tkinter
     so the public tool stays dependency-light for gamers. Sanctuary-dark
-    live bars (CPU / RAM / GPU / VRAM-with-GB) + a sparkline fed straight
-    from sentinel_readings.csv — the flight recorder becomes the chart.
-    Every tool the old tray menu carried lives here as a button now.
-    Thread hygiene: ALL tk calls stay inside the panel's own thread; the
-    tray thread only sets flags, never touches widgets."""
-    if state.get("panel_alive"):
-        state["panel_lift"] = True       # tick() inside the panel handles it
+    (or Glass Engine) live bars + flight-recorder sparkline + the tools
+    as buttons. ONE thread owns the Panel for its whole life; clicking
+    the header orb to cycle dark<->glass REBUILDS the window inside that
+    same thread — never a second Tk, never a race. If a previous panel
+    thread died badly, the alive-check below self-heals the state."""
+    th = state.get("panel_thread")
+    if th is not None and th.is_alive() and state.get("panel_alive"):
+        state["panel_lift"] = True       # already open -> tick() lifts it
         return
+    state["panel_alive"] = False         # heal any wedged flag
     import threading
 
     def _run():
@@ -749,175 +751,183 @@ def _open_panel(state, cfg, actions):
         except Exception:
             _BEACON["last"] = "Panel needs tkinter (python.org builds include it)"
             return
-        mode = str(cfg.get("panel_mode", "dark")).lower()
-        if mode == "glass":   # [GLASS ENGINE] the Sanctuary sensory mode, on the Panel
-            BG, FG, DIM, ACC = "#050505", "#00EE66", "#008833", "#00FF88"
-            BAR_BG, BTN_BG, BTN_ABG = "#0A0A0A", "#031503", "#052505"
-            _alpha = 0.85
-        else:                 # Sanctuary dark (default)
-            BG, FG, DIM, ACC = "#121417", "#d7dde2", "#8b949e", "#8FBC8F"
-            BAR_BG, BTN_BG, BTN_ABG = "#232a31", "#1b2026", "#232a31"
-            _alpha = 1.0
-        COLS = {"green": "#48c774", "yellow": "#e8b02e",
-                "red": "#e23d37", "blue": "#429eeb"}
         state["panel_alive"] = True
-        root = tk.Tk()
-        root.title("Lkey Sentinel")
-        root.configure(bg=BG)
-        root.attributes("-topmost", True)
-        root.resizable(False, False)
         try:
-            root.attributes("-alpha", _alpha)   # [GLASS ENGINE] translucency
-        except Exception:
-            pass
+            while True:                  # one lap per skin; same thread rebuilds
+                mode = str(cfg.get("panel_mode", "dark")).lower()
+                if mode == "glass":   # [GLASS ENGINE] the Sanctuary sensory mode
+                    BG, FG, DIM, ACC = "#050505", "#00EE66", "#008833", "#00FF88"
+                    BAR_BG, BTN_BG, BTN_ABG = "#0A0A0A", "#031503", "#052505"
+                    _alpha = 0.85
+                else:                 # Sanctuary dark (default)
+                    BG, FG, DIM, ACC = "#121417", "#d7dde2", "#8b949e", "#8FBC8F"
+                    BAR_BG, BTN_BG, BTN_ABG = "#232a31", "#1b2026", "#232a31"
+                    _alpha = 1.0
+                COLS = {"green": "#48c774", "yellow": "#e8b02e",
+                        "red": "#e23d37", "blue": "#429eeb"}
+                root = tk.Tk()
+                root.title("Lkey Sentinel")
+                root.configure(bg=BG)
+                root.attributes("-topmost", True)
+                root.resizable(False, False)
+                try:
+                    root.attributes("-alpha", _alpha)   # [GLASS ENGINE] translucency
+                except Exception:
+                    pass
 
-        head = tk.Canvas(root, width=304, height=32, bg=BG, highlightthickness=0)
-        head.pack(padx=12, pady=(10, 0))
-        bars = tk.Canvas(root, width=304, height=118, bg=BG, highlightthickness=0)
-        bars.pack(padx=12)
-        spark = tk.Canvas(root, width=304, height=64, bg=BG, highlightthickness=0)
-        spark.pack(padx=12, pady=(6, 2))
-        last = tk.Label(root, bg=BG, fg=DIM, font=("Segoe UI", 8),
-                        wraplength=294, justify="left", anchor="w")
-        last.pack(padx=12, fill="x")
-        btnrow = tk.Frame(root, bg=BG)
-        btnrow.pack(padx=12, pady=(4, 10), fill="x")
-        for i in range(2):
-            btnrow.columnconfigure(i, weight=1)
-        for idx, (label, fn) in enumerate(actions.items()):
-            tk.Button(btnrow, text=label, command=fn, bg=BTN_BG, fg=FG,
-                      activebackground=BTN_ABG, activeforeground=FG,
-                      relief="flat", font=("Segoe UI", 8), padx=6, pady=3
-                      ).grid(row=idx // 2, column=idx % 2,
-                             padx=3, pady=2, sticky="ew")
+                head = tk.Canvas(root, width=304, height=32, bg=BG, highlightthickness=0)
+                head.pack(padx=12, pady=(10, 0))
+                bars = tk.Canvas(root, width=304, height=118, bg=BG, highlightthickness=0)
+                bars.pack(padx=12)
+                spark = tk.Canvas(root, width=304, height=64, bg=BG, highlightthickness=0)
+                spark.pack(padx=12, pady=(6, 2))
+                last = tk.Label(root, bg=BG, fg=DIM, font=("Segoe UI", 8),
+                                wraplength=294, justify="left", anchor="w")
+                last.pack(padx=12, fill="x")
+                btnrow = tk.Frame(root, bg=BG)
+                btnrow.pack(padx=12, pady=(4, 10), fill="x")
+                for i in range(2):
+                    btnrow.columnconfigure(i, weight=1)
+                for idx, (label, fn) in enumerate(actions.items()):
+                    tk.Button(btnrow, text=label, command=fn, bg=BTN_BG, fg=FG,
+                              activebackground=BTN_ABG, activeforeground=FG,
+                              relief="flat", font=("Segoe UI", 8), padx=6, pady=3
+                              ).grid(row=idx // 2, column=idx % 2,
+                                     padx=3, pady=2, sticky="ew")
 
-        def bar(y, label, val, text):
-            bars.create_text(4, y, anchor="w", fill=FG,
-                             font=("Segoe UI", 8), text=label)
-            x0, x1 = 56, 300
-            bars.create_rectangle(x0, y - 5, x1, y + 5,
-                                  outline=BAR_BG, width=1)
-            if isinstance(val, (int, float)):
-                frac = max(0.0, min(1.0, float(val) / 100.0))
-                bars.create_rectangle(x0, y - 5, x0 + frac * (x1 - x0), y + 5,
-                                      fill=ACC, width=0)
-            bars.create_text(x1, y - 12, anchor="e", fill=DIM,
-                             font=("Segoe UI", 7), text=text)
+                def bar(y, label, val, text):
+                    bars.create_text(4, y, anchor="w", fill=FG,
+                                     font=("Segoe UI", 8), text=label)
+                    x0, x1 = 56, 300
+                    bars.create_rectangle(x0, y - 5, x1, y + 5,
+                                          outline=BAR_BG, width=1)
+                    if isinstance(val, (int, float)):
+                        frac = max(0.0, min(1.0, float(val) / 100.0))
+                        bars.create_rectangle(x0, y - 5, x0 + frac * (x1 - x0), y + 5,
+                                              fill=ACC, width=0)
+                    bars.create_text(x1, y - 12, anchor="e", fill=DIM,
+                                     font=("Segoe UI", 7), text=text)
 
-        def _spark_points():
-            try:
-                lines = FLIGHT_LOG.read_text(encoding="utf-8").strip().splitlines()
-                if len(lines) < 3:
-                    return [], ""
-                hdr = lines[0].split(",")
-                col = "gpu_temp" if "gpu_temp" in hdr else "cpu"
-                ci = hdr.index(col)
-                pts = []
-                for ln in lines[-120:]:
-                    parts = ln.split(",")
-                    if parts and parts[0] != "date" and len(parts) > ci:
+                def _spark_points():
+                    try:
+                        lines = FLIGHT_LOG.read_text(encoding="utf-8").strip().splitlines()
+                        if len(lines) < 3:
+                            return [], ""
+                        hdr = lines[0].split(",")
+                        col = "gpu_temp" if "gpu_temp" in hdr else "cpu"
+                        ci = hdr.index(col)
+                        pts = []
+                        for ln in lines[-120:]:
+                            parts = ln.split(",")
+                            if parts and parts[0] != "date" and len(parts) > ci:
+                                try:
+                                    pts.append(float(parts[ci]))
+                                except ValueError:
+                                    pass
+                        return pts, col
+                    except Exception:
+                        return [], ""
+
+                def tick():
+                    try:
+                        if not state.get("panel_alive"):
+                            return
+                        if state.pop("panel_lift", False):
+                            root.deiconify()
+                            root.lift()
+                            root.attributes("-topmost", True)
+                        s = dict(_BEACON.get("sample") or {})
+                        st = beacon_state()
+                        head.delete("all")
+                        head.create_oval(4, 7, 22, 25, fill=COLS.get(st, ACC), width=0)
+                        head.create_text(30, 16, anchor="w", fill=FG,
+                                         font=("Segoe UI", 10, "bold"),
+                                         text=f"{_BEACON_WORD[st]} · {machine_label()}")
+                        bars.delete("all")
+                        cpu_txt = f"{s.get('cpu', '--')}%"
+                        if s.get("cpu_temp") is not None:
+                            cpu_txt += f" · {s['cpu_temp']}°C"
+                        bar(16, "CPU", s.get("cpu"), cpu_txt)
+                        ram_txt = f"{s.get('ram', '--')}%"
+                        if "ram_used_gb" in s:
+                            ram_txt += f" · {s['ram_used_gb']} GB"
+                        bar(44, "RAM", s.get("ram"), ram_txt)
+                        if "gpu_load" in s or "gpu_temp" in s:
+                            gpu_txt = f"{s.get('gpu_load', '--')}%"
+                            if "gpu_temp" in s:
+                                gpu_txt += f" · {s['gpu_temp']}°C"
+                        else:
+                            gpu_txt = "no NVML"
+                        bar(72, "GPU", s.get("gpu_load"), gpu_txt)
+                        if "vram" in s:
+                            vr_txt = f"{s.get('vram', '--')}%"
+                            if "vram_total_gb" in s:
+                                vr_txt += (f" · {s.get('vram_used_gb', '?')}"
+                                           f"/{s.get('vram_total_gb', '?')} GB")
+                        else:
+                            vr_txt = "no NVML"
+                        bar(100, "VRAM", s.get("vram"), vr_txt)
+                        spark.delete("all")
+                        pts, col = _spark_points()
+                        spark.create_text(4, 8, anchor="w", fill=DIM, font=("Segoe UI", 7),
+                                          text=f"flight recorder · {col or 'no data yet'}")
+                        if len(pts) >= 2:
+                            lo, hi = min(pts), max(pts)
+                            span = (hi - lo) or 1.0
+                            w, h = 304, 64
+                            step = (w - 8) / (len(pts) - 1)
+                            coords = []
+                            for i2, v in enumerate(pts):
+                                coords += [4 + i2 * step,
+                                           h - 6 - (v - lo) / span * (h - 22)]
+                            spark.create_line(*coords, fill=ACC, width=1)
+                            spark.create_text(300, 8, anchor="e", fill=DIM,
+                                              font=("Segoe UI", 7), text=f"{lo:.0f}-{hi:.0f}")
+                        if _BEACON.get("last"):
+                            last.config(text=_BEACON["last"][:160])
+                        root.after(2000, tick)
+                    except Exception:
+                        return            # window died mid-draw: stop quietly
+
+                def _cycle_mode(_e=None):
+                    # [GLASS ENGINE v1.2] persist the new skin, then let THIS
+                    # thread's loop rebuild — never a second window, no race
+                    new_mode = "glass" if mode != "glass" else "dark"
+                    cfg["panel_mode"] = new_mode
+                    try:
+                        _cur = {}
                         try:
-                            pts.append(float(parts[ci]))
-                        except ValueError:
+                            _cur = json.loads(CFG.read_text(encoding="utf-8"))
+                        except Exception:
                             pass
-                return pts, col
-            except Exception:
-                return [], ""
+                        _cur["panel_mode"] = new_mode
+                        CFG.write_text(json.dumps(_cur, indent=2), encoding="utf-8")
+                    except OSError:
+                        pass
+                    state["panel_restyle"] = True
+                    try:
+                        root.destroy()
+                    except Exception:
+                        pass
+                head.bind("<Button-1>", _cycle_mode)
 
-        def tick():
-            if not state.get("panel_alive"):
-                return
-            if state.pop("panel_lift", False):
-                try:
-                    root.deiconify()
-                    root.lift()
-                    root.attributes("-topmost", True)
-                except Exception:
-                    pass
-            s = dict(_BEACON.get("sample") or {})
-            st = beacon_state()
-            head.delete("all")
-            head.create_oval(4, 7, 22, 25, fill=COLS.get(st, ACC), width=0)
-            head.create_text(30, 16, anchor="w", fill=FG,
-                             font=("Segoe UI", 10, "bold"),
-                             text=f"{_BEACON_WORD[st]} · {machine_label()}")
-            bars.delete("all")
-            cpu_txt = f"{s.get('cpu', '--')}%"
-            if s.get("cpu_temp") is not None:
-                cpu_txt += f" · {s['cpu_temp']}°C"
-            bar(16, "CPU", s.get("cpu"), cpu_txt)
-            ram_txt = f"{s.get('ram', '--')}%"
-            if "ram_used_gb" in s:
-                ram_txt += f" · {s['ram_used_gb']} GB"
-            bar(44, "RAM", s.get("ram"), ram_txt)
-            if "gpu_load" in s or "gpu_temp" in s:
-                gpu_txt = f"{s.get('gpu_load', '--')}%"
-                if "gpu_temp" in s:
-                    gpu_txt += f" · {s['gpu_temp']}°C"
-            else:
-                gpu_txt = "no NVML"
-            bar(72, "GPU", s.get("gpu_load"), gpu_txt)
-            if "vram" in s:
-                vr_txt = f"{s.get('vram', '--')}%"
-                if "vram_total_gb" in s:
-                    vr_txt += (f" · {s.get('vram_used_gb', '?')}"
-                               f"/{s.get('vram_total_gb', '?')} GB")
-            else:
-                vr_txt = "no NVML"
-            bar(100, "VRAM", s.get("vram"), vr_txt)
-            spark.delete("all")
-            pts, col = _spark_points()
-            spark.create_text(4, 8, anchor="w", fill=DIM, font=("Segoe UI", 7),
-                              text=f"flight recorder · {col or 'no data yet'}")
-            if len(pts) >= 2:
-                lo, hi = min(pts), max(pts)
-                span = (hi - lo) or 1.0
-                w, h = 304, 64
-                step = (w - 8) / (len(pts) - 1)
-                coords = []
-                for i2, v in enumerate(pts):
-                    coords += [4 + i2 * step,
-                               h - 6 - (v - lo) / span * (h - 22)]
-                spark.create_line(*coords, fill=ACC, width=1)
-                spark.create_text(300, 8, anchor="e", fill=DIM,
-                                  font=("Segoe UI", 7), text=f"{lo:.0f}-{hi:.0f}")
-            if _BEACON.get("last"):
-                last.config(text=_BEACON["last"][:160])
-            root.after(2000, tick)
-
-        def on_close():
-            state["panel_alive"] = False
-            try:
-                root.destroy()
-            except Exception:
-                pass
-
-        root.protocol("WM_DELETE_WINDOW", on_close)
-
-        def _cycle_mode(_e=None):
-            # [GLASS ENGINE] click the orb: dark <-> glass, remembered in config
-            new_mode = "glass" if mode != "glass" else "dark"
-            cfg["panel_mode"] = new_mode
-            try:
-                _cur = {}
-                try:
-                    _cur = json.loads(CFG.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
-                _cur["panel_mode"] = new_mode
-                CFG.write_text(json.dumps(_cur, indent=2), encoding="utf-8")
-            except OSError:
-                pass
-            on_close()
-            _open_panel(state, cfg, actions)
-        head.bind("<Button-1>", _cycle_mode)
-        tick()
-        try:
-            root.mainloop()
+                def on_close():
+                    try:
+                        root.destroy()
+                    except Exception:
+                        pass
+                root.protocol("WM_DELETE_WINDOW", on_close)
+                tick()
+                root.mainloop()
+                if state.pop("panel_restyle", False):
+                    continue             # same thread, new skin
+                break
         finally:
             state["panel_alive"] = False
 
-    threading.Thread(target=_run, daemon=True).start()
+    t = threading.Thread(target=_run, daemon=True)
+    state["panel_thread"] = t
+    t.start()
 
 
 def run_tray(cfg):
