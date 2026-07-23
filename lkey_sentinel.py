@@ -930,6 +930,88 @@ def _open_panel(state, cfg, actions):
     t.start()
 
 
+def _self_icon(here):
+    """[SELF-HEAL] The Sentinel's own face. Prefers a shipped
+    LKEY_SENTINEL.ico; otherwise draws one from the same orb it wears in
+    the tray, written in classic BMP frames — the only ICO encoding every
+    Windows shell path accepts (PNG-framed icons silently fall back to
+    generic on .bat/.vbs shortcuts). No download, no new dependency."""
+    ico = here / "LKEY_SENTINEL.ico"
+    try:
+        if ico.exists() and ico.stat().st_size > 2000:
+            return ico
+    except Exception:
+        pass
+    try:
+        import struct
+        from PIL import Image, ImageDraw
+        sizes = [16, 24, 32, 48, 64, 128, 256]
+        frames = []
+        for sz in sizes:
+            img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            c = sz / 2.0
+            r = sz * 0.33
+            glow = sz * 0.10
+            d.ellipse([c - r - glow, c - r - glow, c + r + glow, c + r + glow],
+                      fill=(72, 199, 116, 80))
+            d.ellipse([c - r, c - r, c + r, c + r], fill=(72, 199, 116, 255))
+            d.ellipse([c - r * 0.55, c - r * 0.62, c + r * 0.30, c + r * 0.15],
+                      fill=(168, 245, 195, 170))
+            px = img.load()
+            w = h = sz
+            hdr = struct.pack('<IiiHHIIiiII', 40, w, h * 2, 1, 32, 0, 0, 0, 0, 0, 0)
+            xor = bytearray()
+            for y in range(h - 1, -1, -1):
+                for x in range(w):
+                    _r, _g, _b, _a = px[x, y]
+                    xor += bytes((_b, _g, _r, _a))
+            row_bytes = ((w + 31) // 32) * 4
+            frames.append((sz, hdr + bytes(xor) + bytes(bytearray(row_bytes * h))))
+        head = struct.pack('<HHH', 0, 1, len(frames))
+        offset = 6 + 16 * len(frames)
+        entries, blobs = b'', b''
+        for sz, data in frames:
+            b = sz if sz < 256 else 0
+            entries += struct.pack('<BBBBHHII', b, b, 0, 0, 1, 32, len(data), offset)
+            blobs += data
+            offset += len(data)
+        ico.write_bytes(head + entries + blobs)
+        return ico
+    except Exception:
+        return None
+
+
+def _heal_shortcut():
+    """[SELF-HEAL] Make the desktop shortcut exist and wear the orb.
+    The updater ships CODE, never Windows shortcut objects — so the app
+    repairs its own on every start. Idempotent, silent, non-Windows safe."""
+    import os as _os
+    if _os.name != "nt":
+        return
+    try:
+        import subprocess as _sp
+        here = Path(__file__).resolve().parent
+        ico = _self_icon(here)
+        if ico is None:
+            return
+        launcher = here / "START_SENTINEL.bat"
+        target = str(launcher) if launcher.exists() else str(Path(sys.executable))
+        ps = (
+            "$sh=New-Object -ComObject WScript.Shell;"
+            "$p=[Environment]::GetFolderPath('Desktop')+'\\Lkey Sentinel.lnk';"
+            "$s=$sh.CreateShortcut($p);"
+            "$s.TargetPath='" + target + "';"
+            "$s.WorkingDirectory='" + str(here) + "';"
+            "$s.IconLocation='" + str(ico) + ",0';"
+            "$s.Save()"
+        )
+        _sp.run(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps],
+                capture_output=True, timeout=25)
+    except Exception:
+        pass
+
+
 def run_tray(cfg):
     """[BEACON] The tray IS the status: an orb wearing the Honest Alert's
     colour truth. Monk-minimal menu — Show Panel (left-click default) and
@@ -938,6 +1020,13 @@ def run_tray(cfg):
     lives as a Panel button: nothing shipped was lost, it moved indoors."""
     import pystray
     import threading
+    try:   # [SELF-HEAL] own taskbar identity — the orb, not Python's icon
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "Rouxster.LkeySentinel")
+    except Exception:
+        pass
+    _heal_shortcut()   # [SELF-HEAL] a shortcut that wears its own face
     animate = bool(cfg.get("beacon_animate", True))
     frames = _beacon_frames(animate=animate)
     state = {"stop": False, "panel_alive": False, "panel_lift": False}
