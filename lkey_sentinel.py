@@ -995,13 +995,24 @@ def _heal_shortcut():
         ico = _self_icon(here)
         if ico is None:
             return
-        launcher = here / "START_SENTINEL.bat"
-        target = str(launcher) if launcher.exists() else str(Path(sys.executable))
+        # [PIN v2] Windows will not hold a taskbar pin on a shortcut whose
+        # target is a .bat, so pointing at START_SENTINEL.bat meant the pin
+        # vanished the moment the app closed. sys.executable is the
+        # interpreter actually running us — a real .exe, correct on every
+        # machine, no hardcoded path. Prefer pythonw so nothing flashes.
+        _py = sys.executable
+        if _py.lower().endswith("python.exe"):
+            _pw = _py[:-len("python.exe")] + "pythonw.exe"
+            if Path(_pw).exists():
+                _py = _pw
+        target = _py
+        _args = '"' + str(Path(__file__).resolve()) + '" --tray'
         ps = (
             "$sh=New-Object -ComObject WScript.Shell;"
             "$p=[Environment]::GetFolderPath('Desktop')+'\\Lkey Sentinel.lnk';"
             "$s=$sh.CreateShortcut($p);"
             "$s.TargetPath='" + target + "';"
+            "$s.Arguments='" + _args + "';"   # [PIN v2]
             "$s.WorkingDirectory='" + str(here) + "';"
             "$s.IconLocation='" + str(ico) + ",0';"
             "$s.Save()"
