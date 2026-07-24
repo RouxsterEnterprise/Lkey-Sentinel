@@ -477,7 +477,7 @@ def watch(cfg, notify=None, stop=lambda: False):
     say = notify or (lambda m: print(m))
     say(f"🛡️ Sentinel online ({machine_name}) — gentle watch every {cfg['poll_seconds']}s. "
         "Warns before trouble; pings Telegram on danger; logs a black box.")
-    if send_telegram(f"🛡️ Lkey Sentinel is now watching {machine_name}. "
+    if send_telegram(f"🛡️ Sentinel is now watching {machine_name}. "
                      "You'll get a message here if anything gets dangerous."):
         say("   📡 Telegram link confirmed — startup ping sent to you.")
     last_alert = 0
@@ -766,7 +766,7 @@ def _open_panel(state, cfg, actions):
                 COLS = {"green": "#48c774", "yellow": "#e8b02e",
                         "red": "#e23d37", "blue": "#429eeb"}
                 root = tk.Tk()
-                root.title("Lkey Sentinel")
+                root.title("Sentinel")
                 root.configure(bg=BG)
                 root.attributes("-topmost", True)
                 root.resizable(False, False)
@@ -1023,7 +1023,7 @@ def run_tray(cfg):
     try:   # [SELF-HEAL] own taskbar identity — the orb, not Python's icon
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "Rouxster.LkeySentinel")
+            "Lkey.Sentinel")
     except Exception:
         pass
     _heal_shortcut()   # [SELF-HEAL] a shortcut that wears its own face
@@ -1120,7 +1120,7 @@ def run_tray(cfg):
         _menu_items.append(pystray.MenuItem(_lbl, (lambda f: (lambda *a: f()))(_fn)))
     _menu_items.append(pystray.MenuItem("Quit", _quit))
     icon = pystray.Icon(
-        "LkeySentinel", frames["green"][0], "Lkey Sentinel — calm",
+        "Sentinel", frames["green"][0], "Sentinel — calm",
         menu=pystray.Menu(*_menu_items))
 
     def _animate():
@@ -1135,7 +1135,7 @@ def run_tray(cfg):
             elif st != shown:
                 icon.icon = seq[0]        # static law: swap ONLY on change
             if st != shown:
-                icon.title = f"Lkey Sentinel — {_BEACON_WORD[st]}"
+                icon.title = f"Sentinel — {_BEACON_WORD[st]}"
                 shown = st
             time.sleep(0.12 if animate else 0.5)
 
