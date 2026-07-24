@@ -1047,7 +1047,7 @@ def run_tray(cfg):
                 os.makedirs(shots, exist_ok=True)
                 _drop_safety_note(shots)
                 fname = os.path.join(
-                    shots, f"screenshot_{datetime.now():%Y%m%d_%H%M%S}.png")
+                    shots, f"Sentinel_SS_{datetime.now():%Y%m%d_%H%M%S}.png")
                 try:
                     ImageGrab.grab(all_screens=True).save(fname)
                 except TypeError:
@@ -1127,6 +1127,14 @@ def run_tray(cfg):
         i = 0
         shown = None
         while not state["stop"]:
+            # [SINGLE INSTANCE] a second launch left a poke — show the Panel
+            try:
+                _pk = _poke_path()
+                if _pk.exists():
+                    _pk.unlink()
+                    _show_panel()
+            except Exception:
+                pass
             st = beacon_state()
             seq = frames[st]
             if animate:
@@ -1147,6 +1155,40 @@ def run_tray(cfg):
     icon.run()                            # must own the main thread on Windows
 
 
+# ---------------------------------------------------------------
+# [SINGLE INSTANCE] one Sentinel, poked awake — never a second copy
+# ---------------------------------------------------------------
+def _poke_path():
+    try:
+        return CFG.parent / ".sentinel_poke"
+    except Exception:
+        return Path(__file__).resolve().parent / ".sentinel_poke"
+
+
+def _single_instance_guard():
+    """True = we are the first Sentinel, carry on. False = one is already
+    watching; we poked it to show its Panel and should exit quietly.
+
+    Named mutex, not a lockfile — the OS drops it however the process
+    ends, so there is no stale lock to strand the next launch."""
+    import os as _os
+    if _os.name != "nt" or "--new" in sys.argv:
+        return True
+    try:
+        import ctypes
+        _k32 = ctypes.windll.kernel32
+        _k32.CreateMutexW(None, False, "Lkey.Sentinel.SingleInstance")
+        if _k32.GetLastError() == 183:          # ERROR_ALREADY_EXISTS
+            try:
+                _poke_path().write_text(str(time.time()), encoding="utf-8")
+            except OSError:
+                pass
+            return False
+    except Exception:
+        pass                                    # never block a launch on this
+    return True
+
+
 def main():
     # apply any verified update that was staged on a previous run (safe: nothing
     # is running from the file yet). Never blocks startup if it fails.
@@ -1164,6 +1206,9 @@ def main():
             print(f"  ⚠️ {msg}")
         if not a:
             print("  ✅ all readings in the safe zone")
+        return
+    if not _single_instance_guard():   # [SINGLE INSTANCE]
+        print("Sentinel is already watching — poked it to show its Panel.")
         return
     if "--tray" in sys.argv:
         try:
