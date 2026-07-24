@@ -1023,6 +1023,171 @@ def _heal_shortcut():
         pass
 
 
+# ---------------------------------------------------------------
+# [PERF DOCTOR] every rival shows numbers; this one says what's wrong
+# ---------------------------------------------------------------
+_DOCTOR_HEAVY = {
+    "msmpeng.exe": ("Windows Defender is scanning in the background",
+                    "Add your game and project folders to Defender's exclusion "
+                    "list (Windows Security > Virus & threat protection > "
+                    "Manage settings > Exclusions)."),
+    "searchindexer.exe": ("Windows Search is rebuilding its index",
+                          "It settles on its own. If it never does, rebuild the "
+                          "index in Indexing Options > Advanced."),
+    "vmmem": ("WSL / a virtual machine is holding a large block of memory",
+              "Cap it in C:\\Users\\<you>\\.wslconfig with memory=8GB and "
+              "autoMemoryReclaim=gradual, then run: wsl --shutdown"),
+    "vmmemwsl": ("WSL is holding a large block of memory",
+                 "Cap it in .wslconfig (memory=8GB, autoMemoryReclaim=gradual), "
+                 "then: wsl --shutdown"),
+    "ollama.exe": ("A local AI model is resident in memory",
+                   "That is normal while you use it. Free it with: ollama stop <model>"),
+    "tiworker.exe": ("Windows Update is installing in the background",
+                     "Let it finish, or pause updates while you play."),
+    "compattelrunner.exe": ("Windows telemetry is collecting data",
+                            "Safe to end. It reschedules itself; harmless either way."),
+    "onedrive.exe": ("OneDrive is syncing files",
+                     "Pause syncing while you work: tray icon > Pause sync."),
+}
+
+
+def _doctor_procs(top=8):
+    """Heaviest processes right now. Read-only."""
+    out = []
+    try:
+        import psutil
+        procs = []
+        for p in psutil.process_iter(["name", "memory_info"]):
+            try:
+                p.cpu_percent(None)
+                procs.append(p)
+            except Exception:
+                continue
+        time.sleep(0.4)                     # one short window for real CPU %
+        rows = []
+        for p in procs:
+            try:
+                rows.append((p.info.get("name") or "?",
+                             p.cpu_percent(None),
+                             (p.info.get("memory_info").rss if p.info.get("memory_info") else 0) / 1e9))
+            except Exception:
+                continue
+        rows.sort(key=lambda r: (r[1], r[2]), reverse=True)
+        out = rows[:top]
+    except Exception:
+        pass
+    return out
+
+
+def _diagnose(cfg=None):
+    """Return (headline, [lines]) — what is wrong, in plain words, with a
+    cure attached to every finding. Observes only; never acts."""
+    cfg = cfg or {}
+    findings, notes = [], []
+    s = {}
+    try:
+        s = sample()
+    except Exception:
+        pass
+
+    # --- the vitals, judged against honest thresholds ---
+    ram = s.get("ram")
+    if isinstance(ram, (int, float)) and ram >= 90:
+        findings.append((
+            f"Memory is nearly full ({ram:.0f}%)",
+            "Windows starts swapping to disk, which is what makes everything "
+            "feel sticky. Close what you are not using, or see the heavy "
+            "processes below."))
+    vram = s.get("vram")
+    if isinstance(vram, (int, float)) and vram >= 90:
+        findings.append((
+            f"Video memory is nearly full ({vram:.0f}%"
+            + (f", {s.get('vram_used_gb')}/{s.get('vram_total_gb')} GB" if s.get("vram_total_gb") else "")
+            + ")",
+            "Games and AI models fall back to system RAM when VRAM runs out, "
+            "which causes stutter. Lower texture quality, or unload a resident "
+            "AI model (ollama stop <model>)."))
+    gt = s.get("gpu_temp")
+    if isinstance(gt, (int, float)) and gt >= 83:
+        findings.append((
+            f"The graphics card is hot ({gt:.0f}\u00b0C)",
+            "It will throttle itself to protect the hardware, and that shows up "
+            "as sudden frame drops. Check case airflow and dust in the GPU fans."))
+    ct = s.get("cpu_temp")
+    if isinstance(ct, (int, float)) and ct >= 90:
+        findings.append((
+            f"The processor is hot ({ct:.0f}\u00b0C)",
+            "It will slow itself down to stay safe. Usually dust in the cooler "
+            "or dried thermal paste."))
+
+    # --- the heavy processes, named and explained ---
+    rows = _doctor_procs()
+    known = []
+    for name, cpu, gb in rows:
+        key = (name or "").lower()
+        if key in _DOCTOR_HEAVY and (cpu >= 5 or gb >= 1.5):
+            what, cure = _DOCTOR_HEAVY[key]
+            known.append((f"{what} ({name}: {cpu:.0f}% CPU, {gb:.1f} GB)", cure))
+    findings.extend(known)
+    if rows:
+        notes.append("Heaviest right now: " + ", ".join(
+            f"{n} {c:.0f}%/{g:.1f}GB" for n, c, g in rows[:4]))
+
+    # --- our own footprint, honestly reported ---
+    try:
+        import psutil, os as _os
+        me = psutil.Process(_os.getpid())
+        notes.append(f"Sentinel itself: {me.memory_info().rss/1e6:.0f} MB "
+                     f"(we watch the machine; we do not weigh on it)")
+    except Exception:
+        pass
+
+    # --- disk pressure: the quiet cause of 'everything hangs' ---
+    try:
+        import psutil
+        du = psutil.disk_usage("C:\\" if _os_name_is_nt() else "/")
+        if du.percent >= 92:
+            findings.append((
+                f"The system drive is nearly full ({du.percent:.0f}%)",
+                "Windows needs free space for its page file and temp files. "
+                "Below about 10% free, everything slows down. Clear space or "
+                "move large folders to another drive."))
+    except Exception:
+        pass
+
+    if not findings:
+        head = "\u2705 Nothing is wrong that I can see."
+        notes.insert(0, "Vitals are inside honest thresholds and no heavy "
+                        "background process is competing with you.")
+    elif len(findings) == 1:
+        head = "\u26a0\ufe0f One thing is slowing this machine down."
+    else:
+        head = f"\u26a0\ufe0f {len(findings)} things are slowing this machine down."
+
+    lines = []
+    for what, cure in findings:
+        lines.append(f"\u2022 {what}")
+        lines.append(f"   \u2192 {cure}")
+    if notes:
+        lines.append("")
+        lines.extend(notes)
+    return head, lines
+
+
+def _os_name_is_nt():
+    import os as _os
+    return _os.name == "nt"
+
+
+def doctor_text(cfg=None):
+    """One printable diagnosis. Never raises."""
+    try:
+        head, lines = _diagnose(cfg)
+        return head + ("\n" + "\n".join(lines) if lines else "")
+    except Exception as e:
+        return f"Doctor could not finish ({e.__class__.__name__}: {e})"
+
+
 def run_tray(cfg):
     """[BEACON] The tray IS the status: an orb wearing the Honest Alert's
     colour truth. Monk-minimal menu — Show Panel (left-click default) and
@@ -1107,7 +1272,19 @@ def run_tray(cfg):
                 report(f"Update check failed: {_e}")
         threading.Thread(target=_do, daemon=True).start()
 
+    def act_doctor():                     # [PERF DOCTOR]
+        def _do():
+            try:
+                report("\U0001fa7a reading the machine\u2026")
+                _t = doctor_text(cfg)
+                report(_t[:900])
+                print("\n" + _t + "\n")
+            except Exception as _e:
+                report(f"Doctor failed: {_e}")
+        threading.Thread(target=_do, daemon=True).start()
+
     actions = {
+        "\U0001fa7a What's wrong?": act_doctor,
         "\U0001f4f8 Screenshot": act_screenshot,
         "Open captures": act_open_caps,
         "Free memory (safe)": act_free_mem,
@@ -1217,6 +1394,9 @@ def main():
             print(f"  ⚠️ {msg}")
         if not a:
             print("  ✅ all readings in the safe zone")
+        return
+    if "--doctor" in sys.argv:         # [PERF DOCTOR]
+        print(doctor_text(cfg))
         return
     if not _single_instance_guard():   # [SINGLE INSTANCE]
         print("Sentinel is already watching — poked it to show its Panel.")
